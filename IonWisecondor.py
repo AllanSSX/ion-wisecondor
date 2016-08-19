@@ -42,7 +42,6 @@ class IonWisecondor(IonPlugin):
 			
 			item["sample"] 	= sample
 			item["barcode"] = barcode
-			item["key"]  	= key
 			item["input"] 	= input
 			item["pickle"] 	= self.urlPlugin + "/" + sample + "_" + self.date +".pickle" 
 			item["gcc"] 	= self.urlPlugin + "/" + sample + "_" + self.date +".gcc" 
@@ -53,23 +52,32 @@ class IonWisecondor(IonPlugin):
 			
 		# ================ LOOP ON EACH FILES AND START COMPUTATION 
 		for item in files:
-			# Launch run.sh 
-			cmd = self.pluginDir+"/run.sh %s %s %s %s %s" % (item["input"], self.outputDir, self.pluginDir, item["sample"], self.date)
-			p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-			stdout, stderr = p1.communicate()
-			# Check error
-			if p1.returncode == 0:
-				# Compute average of zSmoothDict from sample_rawlib.tested
-				filePath = os.environ["RESULTS_DIR"] + "/" + item["sample"] + "_" + self.date + ".tested"
-				
-				item["s21"] = self.scoreOf(filePath, "21")
-				item["s18"] = self.scoreOf(filePath, "18")
-				item["s13"] = self.scoreOf(filePath, "13")
-				
-				print(stdout)
-			else:
-				raise Exception(stderr)
-				
+			# mapped reads
+			cmd_mapped = "samtools view -c -F 4 {bam}".format(bam=item["input"])
+			self.jobLauncher(cmd_mapped)
+			
+			# pickle
+			cmd_pickle = "samtools view {bam} -q 1 | python {pluginDir}/wisecondor/consam.py -outfile {outputDir}/{sample}_{date}.pickle".format(bam=item["input"], pluginDir = self.pluginDir, outputDir = self.outputDir, sample = item["sample"], date= self.date)
+			self.jobLauncher(cmd_pickle)
+
+			# gcc
+			cmd_gcc = "python {pluginDir}/wisecondor/gcc.py {outputDir}/{sample}_{date}.pickle {pluginDir}/data/hg19.gccount {outputDir}/{sample}_{date}.gcc".format(pluginDir = self.pluginDir, outputDir = self.outputDir, sample = item["sample"], date= self.date)
+			self.jobLauncher(cmd_gcc)
+			
+			# tested
+			cmd_tested = "python {pluginDir}/wisecondor/test.py {outputDir}/{sample}_{date}.gcc {pluginDir}/data/reftable {outputDir}/{sample}_{date}.tested".format(pluginDir = self.pluginDir, outputDir = self.outputDir, sample = item["sample"], date= self.date)
+			self.jobLauncher(cmd_tested)
+			
+			# pdf
+			cmd_pdf = "python {pluginDir}/wisecondor/plot.py {outputDir}/{sample}_{date}.tested  {outputDir}/{sample}_{date}".format(pluginDir = self.pluginDir, outputDir = self.outputDir, sample = item["sample"], date= self.date)	
+			self.jobLauncher(cmd_pdf)
+			
+			# score
+			filePath = os.environ["RESULTS_DIR"] + "/" + item["sample"] + "_" + self.date + ".tested"
+			item["s21"] = self.scoreOf(filePath, "21")
+			item["s18"] = self.scoreOf(filePath, "18")
+			item["s13"] = self.scoreOf(filePath, "13")
+		
 		# ================ GENERATE RESULTS HTML FROM DJANGO TEMPLATE SYSTEM
 		settings.configure()
 		source = open(os.environ["RUNINFO__PLUGIN__PATH"] + "/block_template.html", "r").read()
@@ -92,6 +100,14 @@ class IonWisecondor(IonPlugin):
 			except :
 				score = -1
 		return round(score,2)
+	
+	def jobLauncher(self, cmd):
+		p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+		stdout, stderr = p.communicate()
+		if p.returncode == 0:
+			print(stdout)
+		else:
+			raise Exception(stderr)
 
 if __name__ == "__main__":
   PluginCLI()
